@@ -1,0 +1,10 @@
+openai>=1.40
+requests>=2.31
+Pillow>=10.0
+
+# only needed if you set --provider anthropic
+# anthropic>=0.40
+
+# optional: enables SVG files from sources without raster previews
+# Wikimedia's PNG previews work without this package.
+# cairosvg>=2.7
