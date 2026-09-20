@@ -1,25 +1,37 @@
 """
 THE RUBRIC — this is the file you tune.
 
-Two things live here:
+READING MAP — the three AI stages:
 
-  1. CRITERIA  — the dimensions a figure is graded on, their weights, and the
-     anchored descriptions the model is given. The prompt text is *generated*
-     from this list, so a weight change and a prompt change are the same edit
-     and can never drift apart.
+  PART 1: PLAN THE SEARCH
+    PLANNER_SYSTEM sets the AI's role.
+    PLANNER_PROMPT receives your notes and asks for a checklist and queries.
+    PLAN_SCHEMA defines the fields the AI must return.
 
-  2. The prompts themselves — planner (notes -> queries + topic-specific
-     requirements) and scorer (image -> graded JSON).
+  PART 2: GRADE THE IMAGES
+    CRITERIA defines what earns each score; VETO_FLAGS defines problems.
+    SCORER_SYSTEM sets the grader's role; SCORER_PROMPT gives its instructions.
+    render_scorer_prompt inserts Part 1's checklist and the grading rules.
+    build_score_schema defines the scores, flags, and explanations to return.
+
+  PART 3: PICK THE WINNER
+    JUDGE_PROMPT asks the AI to compare the finalists and explain its choice.
+    PICK_SCHEMA defines the winner, runner-up, and explanation fields.
+    This stage reuses SCORER_SYSTEM as its role instruction.
+
+This file defines instructions and response formats. llm.py fills the planner
+and judge templates, attaches images for grading/judging, and calls the AI.
+cli.py runs the stages; search.py and fetch.py find and prepare the images
+between Parts 1 and 2. Numeric weights and penalties are applied by Python in
+llm.compute_final_score, not sent to the AI as part of the grading prompt.
 
 Design notes, because they matter more than the code:
 
-  * Scores are anchored. "0-5, higher is better" produces mush; every criterion
-    below spells out what a 0, a 3 and a 5 look like. This is the single
-    biggest lever on output quality.
+  * Scores are anchored. Each criterion spells out examples for specific
+    scores, so the model has concrete guidance beyond "higher is better".
 
-  * Vetoes are separate from scores. A watermark isn't "slightly less pretty",
-    it's disqualifying. Mixing those into one number lets a gorgeous unusable
-    image win.
+  * Problem flags are separate from scores. Some zero the score; others apply
+    penalties. selection.py also excludes unsuitable candidates from the picks.
 
   * The planner writes a *topic-specific* checklist (must_show) before anything
     is searched. The scorer then grades against that concrete checklist rather
@@ -33,6 +45,8 @@ from typing import Dict, List
 
 @dataclass
 class Criterion:
+    # PART 2: One grading dimension. Anchors explain scores to the AI;
+    # weight controls how Python combines that score with the other dimensions.
     key: str
     weight: int          # contribution to the final 0-100 score
     max_score: int       # scale the model grades on
@@ -41,6 +55,7 @@ class Criterion:
 
 
 # ---------------------------------------------------------------------------
+# PART 2 — GRADING RULES: subject, coverage, accuracy, legibility, fit, appearance.
 # The graded dimensions. Weights are relative — they're normalised against each
 # other plus config.RESOLUTION_WEIGHT, so you can change one without rebalancing
 # the rest. They happen to sum to 100 here purely for readability.
@@ -97,7 +112,9 @@ CRITERIA: List[Criterion] = [
     ),
     Criterion(
         key="slide_fit",
-        weight=12,
+        # Slide readiness is useful, but it should not make a simplified image
+        # outrank a more informative textbook figure on presentation alone.
+        weight=6,
         max_score=5,
         label="Slide fit",
         anchors={
@@ -121,6 +138,7 @@ CRITERIA: List[Criterion] = [
     ),
 ]
 
+# PART 2 — PROBLEM FLAGS: the AI reports true/false for each problem below.
 # Flags the model raises independently of the scores. Multiplier is applied to
 # the final score. 0.0 = hard kill.
 VETO_FLAGS: Dict[str, Dict] = {
@@ -131,7 +149,10 @@ VETO_FLAGS: Dict[str, Dict] = {
     },
     "watermarked": {
         "multiplier": 0.15,
-        "prompt": "a stock-photo watermark, tiling logo, or 'SAMPLE'/'PREVIEW' overlay",
+        "prompt": "an intrusive stock-photo watermark, repeated/tiling watermark, or "
+                  "'SAMPLE'/'PREVIEW' overlay obscures the usable figure. Do not flag a "
+                  "small institutional logo, ordinary source credit, copyright line, or "
+                  "publisher attribution",
     },
     "wrong_subject": {
         "multiplier": 0.0,
@@ -159,12 +180,17 @@ VETO_FLAGS: Dict[str, Dict] = {
     },
     "screenshot_or_page_capture": {
         "multiplier": 0.50,
-        "prompt": "it is a screenshot of a webpage/slide/PDF rather than the figure itself",
+        "prompt": "visible browser/PDF/slide controls, surrounding page text, or other "
+                  "interface clutter materially reduces usability. Do not flag a cleanly "
+                  "cropped or extracted figure merely because it came from a webpage, "
+                  "slide, or PDF",
     },
     "ai_generated_looking": {
         "multiplier": 0.25,
-        "prompt": "it has the hallmarks of AI image generation — garbled text, "
-                  "impossible anatomy, melted labels. These are near-useless for teaching.",
+        "prompt": "the image itself contains clear generative failures such as garbled or "
+                  "melted labels, duplicated structures, or impossible anatomy. Do not "
+                  "infer AI generation from illustration style, age, unusual colours, or "
+                  "low resolution alone",
     },
 }
 
@@ -174,6 +200,7 @@ VETO_FLAGS: Dict[str, Dict] = {
 # ---------------------------------------------------------------------------
 
 def _criteria_block() -> str:
+    # PART 2: Turn CRITERIA's names, score ranges, and anchors into prompt text.
     out = []
     for c in CRITERIA:
         lines = [f"- **{c.key}** ({c.label}) — integer 0-{c.max_score}"]
@@ -184,11 +211,13 @@ def _criteria_block() -> str:
 
 
 def _veto_block() -> str:
+    # PART 2: Turn each problem's description into an instruction to flag it.
     return "\n".join(
         f'- **{name}** — true if {spec["prompt"]}' for name, spec in VETO_FLAGS.items()
     )
 
 
+# PART 1 — ROLE: tell the AI it is planning searches for teaching figures.
 PLANNER_SYSTEM = """\
 You plan image searches for someone building teaching slides. You are good at \
 two things: knowing what a genuinely useful figure for a concept looks like, \
@@ -197,6 +226,10 @@ and knowing the exact words that surface it on the open web.
 You never guess at what a figure "probably" shows. You state concretely what \
 must appear in it for it to earn a place on the slide."""
 
+# PART 1 — TASK: llm.make_plan replaces the {...} placeholders with your inputs.
+# The notes/context describe the need; checklist guidance defines a useful image;
+# query guidance controls how the AI searches for it. PLAN_SCHEMA below specifies
+# the response fields. The generated queries are later sent to search APIs.
 PLANNER_PROMPT = """\
 Here are the presenter's jot notes for one slide:
 
@@ -246,6 +279,7 @@ section", "anatomy of".
 query short and broad.
 """
 
+# PART 2 — ROLE (also reused in Part 3): be strict and judge visible legibility.
 SCORER_SYSTEM = """\
 You grade candidate figures for teaching slides. You are strict, specific, and \
 you never inflate a score to be agreeable — a mediocre figure that gets a 4 \
@@ -255,6 +289,11 @@ You are looking at each image at roughly the size it will appear on a slide. \
 Judge legibility at exactly the size you see it. Do not speculate about the \
 original file's resolution — that is measured separately."""
 
+# PART 2 — TASK: carry forward Part 1's concept, required elements, and pitfalls.
+# The next paragraphs require evidence from the image and readable labels.
+# {criteria} and {vetoes} receive the generated rules from the lists above.
+# The final instructions request observed/missing elements and an explanation.
+# llm.score_candidates appends candidate IDs, source hints, and actual images.
 SCORER_PROMPT = """\
 The presenter needs one figure for a slide.
 
@@ -313,6 +352,9 @@ plus arrows for feed flow" — not "a good diagram of ruminant digestion".
 Grade every candidate. Do not skip any. Use the candidate ids exactly as given.
 """
 
+# PART 3 — TASK: compare eligible finalists for practical use on the slide.
+# llm.judge inserts the concept/checklist and appends each finalist's image.
+# This is a separate comparison after scoring; it returns a pick via PICK_SCHEMA.
 JUDGE_PROMPT = """\
 These are the top-scoring candidates for the slide concept below. Pick the one \
 you would actually put on the slide, and say why it beats the runner-up in one \
@@ -341,6 +383,7 @@ dense, correct one.
 # ---------------------------------------------------------------------------
 
 def _obj(properties: dict) -> dict:
+    # SHARED: require every declared response field and disallow extra fields.
     return {
         "type": "object",
         "properties": properties,
@@ -349,6 +392,9 @@ def _obj(properties: dict) -> dict:
     }
 
 
+# PART 1 — RESPONSE FORMAT: the search plan the AI returns as structured data.
+# concept/must_show/nice_to_have/should_avoid feed Part 2; queries feed search.
+# figure_brief describes the ideal image; wants_diagram records the desired type.
 PLAN_SCHEMA = _obj({
     "concept": {
         "type": "string",
@@ -388,6 +434,8 @@ PLAN_SCHEMA = _obj({
 
 def build_score_schema() -> dict:
     """Built from CRITERIA/VETO_FLAGS so the schema can never drift from the prompt."""
+    # PART 2 — RESPONSE FORMAT: one entry per image with its ID, integer grades,
+    # boolean problem flags, observed/missing elements, verdict, and caveat.
     props = {"id": {"type": "string", "description": "The candidate id exactly as given."}}
     for c in CRITERIA:
         props[c.key] = {
@@ -406,6 +454,7 @@ def build_score_schema() -> dict:
     return _obj({"candidates": {"type": "array", "items": _obj(props)}})
 
 
+# PART 3 — RESPONSE FORMAT: chosen image ID, explanation, and optional runner-up.
 PICK_SCHEMA = _obj({
     "winner_id": {"type": "string"},
     "why": {"type": "string"},
@@ -414,6 +463,8 @@ PICK_SCHEMA = _obj({
 
 
 def render_scorer_prompt(plan: dict, audience: str, style: str, language: str) -> str:
+    # PART 2 — ASSEMBLY: combine the fixed template, Part 1's generated checklist,
+    # your context, and the shared grading rules into the text sent to the AI.
     def bullets(items):
         return "\n".join(f"- {i}" for i in items) or "- (none specified)"
 

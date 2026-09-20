@@ -117,6 +117,14 @@ def hydrate(candidates: List[Candidate], workdir: str, verbose=True) -> List[Can
             return c
 
         c.dhash = _dhash(img)
+        if config.EXPORT_MAX_EDGE > 0:
+            export = img.copy()
+            export.thumbnail((config.EXPORT_MAX_EDGE, config.EXPORT_MAX_EDGE), Image.LANCZOS)
+            export_path = os.path.join(workdir, f"{c.id}.download.jpg")
+            export.save(
+                export_path, "JPEG", quality=config.EXPORT_JPEG_QUALITY,
+                optimize=True, progressive=True,
+            )
         small = img.copy()
         small.thumbnail((config.VISION_MAX_EDGE, config.VISION_MAX_EDGE), Image.LANCZOS)
         path = os.path.join(workdir, f"{c.id}.jpg")

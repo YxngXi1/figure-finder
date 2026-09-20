@@ -37,14 +37,14 @@ Watch out for
 
 Searching
     10 results  ·  ruminant four chambered stomach labelled diagram
-    10 results  ·  rumen reticulum omasum abomasum anatomy site:.edu
+    10 results  ·  rumen reticulum omasum abomasum anatomy
     ...
     kept 31 candidates  (dropped: 8 blocked domain, 11 too small)
 
 Fetching
     19 usable images  (dropped: 5 unusable, 7 duplicates)
 
-Grading 19 candidates (gpt-5.6-terra)
+Grading 19 candidates (gpt-4.1-mini)
 
 Top 5 of 19 scored
 
@@ -76,8 +76,9 @@ cp .env.example .env
 On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1` instead, and
 use `python figure-finder` in place of `./figure-finder` in the examples below.
 
-Edit `.env` and replace `[YOUR_OPENAI_API_KEY]` with your own key. The optional
-search keys can remain commented out when using `--sources wikimedia,openverse`.
+Edit `.env` and replace `[YOUR_OPENAI_API_KEY]` and `[YOUR_BRAVE_API_KEY]`
+with your own keys. The default search uses Brave plus Wikimedia. You can use
+`--sources wikimedia,openverse` with only an OpenAI key.
 Your `.env`, virtual environment, downloaded images, and generated reports are
 excluded from Git. Keep custom output folders outside the repository too.
 
@@ -90,8 +91,12 @@ and is shown exactly once. The account also needs credit on it
 (<https://platform.openai.com/settings/organization/billing>) — a key on a
 zero-balance account fails with a confusing 429.
 
-**Google is optional.** Two of the three sources need no keys at all, so you
-can run the tool the moment your OpenAI key is in:
+**Brave key** — create a key at <https://api-dashboard.search.brave.com/>
+with access to Image Search. Brave searches a broad web image index without
+a list of allowed domains. You do not need to install the Brave browser.
+
+**Search keys are optional with the narrower open sources.** With only your
+OpenAI key, you can run:
 
 ```bash
 ./figure-finder "ruminant digestion; four stomach chambers" --sources wikimedia,openverse
@@ -101,15 +106,29 @@ can run the tool the moment your OpenAI key is in:
 
 | source | key needed | quota | good for |
 |---|---|---|---|
+| `brave` | `BRAVE_API_KEY` | metered requests | Broad web image search, including independent websites; no configured domain allowlist. |
 | `wikimedia` | none | none | Wikimedia Commons. Where a great many good scientific and anatomical diagrams actually live. Lots of SVG, which scales perfectly on a slide. |
 | `openverse` | none¹ | throttled anonymously | Aggregates Flickr, museums, science orgs. Best-effort — if it throttles, the run continues without it. |
-| `google` | 2 keys | 100/day free | Broadest reach, but see the caveat below. |
+| `google` | 2 keys | 100/day free | Legacy Google Custom Search; scope depends on the configured engine. |
 
 ¹ Optional: register a free Openverse token and set `OPENVERSE_TOKEN` to lift the
 anonymous rate limit.
 
-Default is all three (`wikimedia,openverse,google`); results are merged and
-deduplicated across them, so the same figure found in two places is graded once.
+Default is `brave,wikimedia`; results are merged and deduplicated across them,
+so the same figure found in two places is graded once. Use `--sources brave`
+for just broad web search, or set `FF_SOURCES=brave,wikimedia` in `.env`.
+An explicit `--sources wikimedia` still searches only Wikimedia.
+
+Brave's [published Search API pricing](https://brave.com/search/api/) is
+$5 per 1,000 requests, with $5 in monthly credits (checked September 20, 2026).
+Five Brave queries cost about $0.025 before credits, separately from AI usage.
+The app requests 20 images per query and grades at most 20 images per run by
+default. This searches an index, not every page on the internet. The existing
+stock-image blocklist and image-quality filters still apply.
+
+Missing Brave credentials stop the run before the paid planning call; `--dry-run`
+only needs the AI key. API errors are reported instead of silently falling back
+to narrower search coverage.
 
 ### Setting up Google (optional)
 
@@ -146,18 +165,32 @@ Free tier is 100 queries/day; one run uses 5.
 
 ### Which model grades the images
 
-Set in `config.py` under `MODELS`, or per-run with `FF_SCORER_MODEL`.
+The planner, scorer, and judge now default to **`gpt-4.1-mini`**. It supports
+image input and structured output and runs without a separate reasoning step.
+This is a starting recommendation for inexpensive checklist-based grading;
+we have not benchmarked its scientific accuracy against the previous default.
 
-| | default | why |
+| setting | default | purpose |
 |---|---|---|
-| planner | `gpt-5.6-terra` | cheap text-only call |
-| scorer | `gpt-5.6-terra` | $2/$12 per Mtok — the cost/judgement sweet spot |
-| `--fast` | `gpt-5.6-luna` | $0.20/$1.20 — ~10x cheaper, blunter on accuracy |
-| judge | `gpt-5.6-terra` | one small call on the finalists |
+| `FF_PLANNER_MODEL` | `gpt-4.1-mini` | turn notes into a checklist and queries |
+| `FF_SCORER_MODEL` | `gpt-4.1-mini` | inspect the candidate images |
+| `FF_JUDGE_MODEL` | `gpt-4.1-mini` | compare the finalists |
+| `FF_FAST_MODEL` | `gpt-5.6-luna` | existing alternative scorer, only with `--fast` |
 
-`gpt-6-astra` is available if you want it (`FF_SCORER_MODEL=gpt-6-astra`), but
-at $10/$50 it's 5x the cost for judgement that's rarely better *at this task* —
-grading a figure against an explicit checklist isn't a reasoning-hard problem.
+Set these in `.env` or as shell environment variables. Shell variables take
+precedence over `.env`. You do not need `--fast` to use the new mini default.
+
+For comparison, the official text-token rates per million tokens are:
+
+| model | input | output | tradeoff |
+|---|---|---|---|
+| [GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini) | $0.40 | $1.60 | default; no separate reasoning step |
+| [GPT-5 mini](https://developers.openai.com/api/docs/models/gpt-5-mini) | $0.25 | $2.00 | reasoning alternative; reasoning tokens can add cost |
+
+Rates checked September 20, 2026. Both accept images; total cost also depends
+on image tokenization, output length, caching, and the number of candidates.
+Keep high image detail for reading labels. Review representative results before
+relying on a cheaper model for scientific accuracy.
 
 ## Use
 
@@ -170,7 +203,7 @@ grading a figure against an explicit checklist isn't a reasoning-hard problem.
                 --top 8 --html --open
 
 ./figure-finder "action potential phases" --dry-run   # plan + queries only; one paid text call
-./figure-finder "photosynthesis light reactions" --fast   # cheaper model
+./figure-finder "photosynthesis light reactions" --fast   # alternative lightweight scorer
 ```
 
 | flag | what it does |
@@ -179,18 +212,87 @@ grading a figure against an explicit checklist isn't a reasoning-hard problem.
 | `--audience` | shapes how much detail the figure should carry |
 | `--style` | "clean labelled textbook diagram", "flowchart", "photograph", … |
 | `--language` | required label language (default English); non-matching or missing required labels exclude a diagram |
-| `--fast` | grade with `gpt-5.6-luna` — roughly 10x cheaper, noticeably blunter on scientific accuracy |
+| `--fast` | use `FF_FAST_MODEL` (default `gpt-5.6-luna`) for scoring; the regular default is already GPT-4.1 mini |
 | `--provider` | `openai` (default) or `anthropic`. Same rubric, same maths — useful for A/B-ing the two on one topic. |
-| `--sources` | `wikimedia,openverse,google` — any comma-separated subset. Drop `google` to run with no search keys at all. |
+| `--sources` | any comma-separated subset of `brave,wikimedia,openverse,google`; default `brave,wikimedia`. Use `wikimedia,openverse` without search keys. |
 | `--max-scored` | cap on how many images get a (paid) vision look. Default 20. |
 | `--html --open` | writes a contact sheet so you can eyeball the picks side by side. Much the fastest way to tell whether the rubric is working. |
+| `--pdf` | save the recommended figure as `figure.pdf` in the `--out` folder |
 | `--no-judge` | skip the final head-to-head comparison |
 
-Cost per full run is roughly 3–6¢ on `gpt-5.6-terra`: ~20 images at ~1.5k tokens
-each (`detail: high`), plus two small text calls. `--fast` brings that under a
-cent. Setting `FF_IMAGE_DETAIL=low` is cheaper again but downsamples every image
-to 512px, which destroys the label text the legibility score depends on — fine
-for smoke tests, useless for real grading.
+AI charges vary with the images and response length; search charges are separate.
+Use `--max-scored` to limit image grading and `--no-judge` to skip the final
+comparison. Keep the default high image detail to preserve small labels.
+
+### Password-protected web preview
+
+The web version keeps the main workflow simple: describe the teaching need,
+review the recommended image, download it, then compare the other suitable
+options and source links at the bottom. Advanced search settings and technical
+diagnostics are collapsed by default. It runs the CLI in a background process
+and provides a clearly named JPEG download up to 1920 pixels on its longest
+edge. The separate 1024-pixel grading copy is still used for the model, so the
+sharper export does not increase vision cost.
+
+The web interface uses Brave Image Search only. Its faster default path runs
+three Brave query angles concurrently, interleaves their results, downloads at
+most 24 candidates, grades eight images in up to two concurrent model calls,
+and skips the optional final judge call. The form can re-enable that comparison.
+Wikimedia, Openverse, and Google remain available only through the diagnostic
+CLI because they provide genuinely different coverage, but they no longer
+appear in the end-user web form.
+
+Access requires the shared password in the ignored `.env.web` file. Successful
+logins receive a signed, HTTP-only, same-site session cookie lasting 12 hours.
+Login attempts are throttled and search/logout forms use CSRF tokens. Exact
+repeated searches reuse an in-memory completed result while the server remains
+running, avoiding duplicate API calls.
+
+Start it from the repository folder:
+
+```bash
+./figure-finder-web
+```
+
+Then open <http://localhost:8000>. Searches are queued one at a time by default
+to limit accidental API spend. Each job is kept under `figurefinder_web_out/`;
+the browser process keeps the recent-job index only until it is restarted.
+
+The default bind address is localhost. You can test from another computer with
+`./figure-finder-web --host 0.0.0.0`, but use HTTPS before entering the password
+over a network. For a durable public deployment it still needs per-user/request
+quotas, a spending cap, automated retention cleanup, persistent jobs, and a
+production process manager. Set `FF_WEB_SECURE_COOKIES=1` behind HTTPS. API
+credentials stay on the server and their values are never shown in the
+interface or child-process command.
+
+Useful diagnostic options:
+
+```bash
+./figure-finder-web --port 8080
+./figure-finder-web --workers 2 --out /path/to/web-jobs
+```
+
+### Example: animal cell diagram as a PDF
+
+```bash
+./figure-finder "Animal cell structure; labelled diagram showing the nucleus, cell membrane, cytoplasm, and mitochondria; English labels" \
+  --sources brave,wikimedia --out examples --pdf --html
+```
+
+The output folder is created automatically. The selected figure is saved locally
+as `examples/figure.pdf`; `examples/candidates.html` shows the suitable candidates
+and `examples/results.json` keeps the scores and source links. If you have no
+Brave API key, use `--sources wikimedia` instead. The `examples/` folder is ignored
+by Git because it contains downloaded images and generated reports.
+
+The PDF contains one image: the judge's eligible winner, or the highest-ranked
+suitable result when there is no valid judge pick. It uses the same downloaded
+slide-scale copy that was graded (up to 1024 pixels on its longest edge), preserves
+its aspect ratio, and includes the source URL in the PDF metadata. It is not a
+vector or full-resolution original. Source links remain in the JSON/HTML reports.
+No PDF is created if no image qualifies. Running again in the same output folder
+overwrites the PDF on success; use a different `--out` folder to keep each run.
 
 ---
 
@@ -263,7 +365,7 @@ Current weights:
 | `checklist_coverage` | 20 | does it show the must-show items |
 | `scientific_accuracy` | 15 | is it correct / trustworthy |
 | `legibility` | 15 | readable from the back of a room |
-| `slide_fit` | 12 | drops on a slide without editing |
+| `slide_fit` | 6 | drops on a slide without editing; a light tie-breaker |
 | `visual_quality` | 8 | doesn't look like clip-art |
 | *resolution* | 8 | computed, not judged |
 
@@ -280,11 +382,12 @@ Some edits worth trying:
 JSON schema and the scoring math all pick it up automatically — nothing else to
 change.
 
-**To kill a category of bad result**, add a `VETO_FLAGS` entry. Multiplier `0.0`
-is a hard kill, `0.3` is "only if nothing else exists". The existing set — stock
-watermarks, wrong subject, photo-when-a-diagram-was-asked-for, unreadable
-labels, wrong language, page screenshots, AI-generated-looking — covers the
-common failure modes; yours will differ.
+**To kill or penalise a category of bad result**, add a `VETO_FLAGS` entry.
+Multiplier `0.0` is a hard kill; a non-zero multiplier is a ranking penalty.
+The existing set covers stock watermarks, wrong subjects, photos when a diagram
+was explicitly requested, unreadable or wrong-language labels, cluttered page
+captures, and images with visible generative errors. Clean PDF/web extracts,
+small attribution marks, and illustration style alone are not problems.
 
 **To change how it searches**, edit `PLANNER_PROMPT`. The "different angles"
 instruction matters more than it looks: five rewordings of one query return the
@@ -309,15 +412,14 @@ tends to settle.
 ## Known limits
 
 - **Licensing is reported, not enforced.** Wikimedia and Openverse results carry
-  a real license string (shown in the output); Google results carry nothing.
-  Fine for a lecture, not for anything published. To enforce it, filter on
+  a license string (shown in the output); Brave and Google results carry none.
+  Check the source page for reuse terms. To enforce it, filter on
   `Candidate.license` before scoring.
 - **SVG from Wikimedia works without `cairosvg`** — Commons rasterises SVGs for
   us on request, which is what `WIKIMEDIA_RASTER_WIDTH` is for. SVGs from
   *other* sources still need `pip install cairosvg`, and are skipped without it.
 - **Google CSE image search is thinner than google.com/images**, and now only
-  covers the sites on your engine. Compensate with more query angles and the
-  other two sources, not more results per query.
+  covers the sites on your engine. Use Brave for broad web image retrieval.
 - **Openverse throttles anonymous callers.** If it drops out mid-run you'll see
   `skipped — Openverse rate limit hit` and the run continues on the others.
 - The perceptual dedupe uses an 8×8 dhash. It catches the same figure re-hosted
@@ -345,7 +447,7 @@ python tests/mock_run.py
 
 Runs the whole pipeline against canned API responses and a fake model — checks the
 prefilters, duplicate collapsing, veto multipliers, score normalisation, ranking
-and both report formats. It also pins the Google, Wikimedia and Openverse
+and both report formats. Tests also pin the Brave, Google, Wikimedia and Openverse
 response parsers to canned payloads, checks that a dead source is skipped rather
 than fatal, and builds a real OpenAI client to assert the exact request body is
 well formed (json_schema + strict, base64 data URL, `max_completion_tokens`,

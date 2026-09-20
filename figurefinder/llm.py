@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
 from . import config, rubric, selection
@@ -168,7 +170,9 @@ def get_provider(name: Optional[str] = None):
 
 
 def models_for(provider_name: str) -> dict:
-    return config.MODELS[provider_name]
+    # The CLI loads .env after importing config; read overrides at call time.
+    return {stage: os.environ.get(f"FF_{stage.upper()}_MODEL", default)
+            for stage, default in config.MODELS[provider_name].items()}
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +243,12 @@ def score_candidates(candidates: List[Candidate], plan: dict, audience: str,
     prompt = rubric.render_scorer_prompt(plan, audience, style, language)
     by_id = {c.id: c for c in candidates}
 
-    for i in range(0, len(candidates), config.SCORE_BATCH_SIZE):
-        batch = candidates[i:i + config.SCORE_BATCH_SIZE]
+    batches = [
+        candidates[i:i + config.SCORE_BATCH_SIZE]
+        for i in range(0, len(candidates), config.SCORE_BATCH_SIZE)
+    ]
+
+    def grade_batch(batch):
         blocks = [text_block(prompt)]
         for c in batch:
             hint = f" — page title: {c.title}" if c.title else ""
@@ -248,10 +256,12 @@ def score_candidates(candidates: List[Candidate], plan: dict, audience: str,
                 f"\n--- CANDIDATE {c.id} (source: {c.host}{hint}) ---"))
             blocks.append(image_block(c.local_path))
 
-        data = p.structured(
+        return p.structured(
             model=model, system=rubric.SCORER_SYSTEM, blocks=blocks,
             schema=schema, schema_name="submit_scores", max_tokens=6000,
         )
+
+    def apply_scores(data):
         for row in data.get("candidates", []):
             c = by_id.get(row.get("id"))
             if not c:
@@ -265,8 +275,23 @@ def score_candidates(candidates: List[Candidate], plan: dict, audience: str,
             c.final_score = compute_final_score(c)
             c.rejected = selection.rejection_reason(c)
 
-        if verbose:
-            print(f"    scored {min(i + len(batch), len(candidates))}/{len(candidates)}")
+    completed = 0
+    workers = min(config.SCORE_WORKERS, len(batches))
+    if workers <= 1:
+        for batch in batches:
+            apply_scores(grade_batch(batch))
+            completed += len(batch)
+            if verbose:
+                print(f"    scored {completed}/{len(candidates)}")
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vision-score") as pool:
+            pending = {pool.submit(grade_batch, batch): batch for batch in batches}
+            for future in as_completed(pending):
+                batch = pending[future]
+                apply_scores(future.result())
+                completed += len(batch)
+                if verbose:
+                    print(f"    scored {completed}/{len(candidates)}")
 
     scored = [c for c in candidates if c.scores]
     scored.sort(key=lambda c: c.final_score, reverse=True)

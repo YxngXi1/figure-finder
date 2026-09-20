@@ -9,7 +9,7 @@ def rejection_reason(candidate: Candidate):
         return candidate.rejected
     for name, spec in rubric.VETO_FLAGS.items():
         if candidate.flags.get(name) and (spec["multiplier"] == 0 or name in {
-            "photo_when_diagram_needed", "screenshot_or_page_capture",
+            "photo_when_diagram_needed",
         }):
             return name
     if candidate.scores.get("subject_match", 0) < 4:

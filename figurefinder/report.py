@@ -1,4 +1,4 @@
-"""Terminal output, JSON dump, optional HTML contact sheet."""
+"""Terminal output, JSON dump, optional HTML contact sheet and figure PDF."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import html
 import json
 from dataclasses import asdict
 from typing import List, Optional
+
+from PIL import Image
 
 from .search import Candidate
 from .selection import rejection_reason, suitable_candidates
@@ -114,6 +116,29 @@ def write_json(path: str, notes: str, plan: dict, results: List[Candidate],
     }
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
+
+
+def write_pdf(path: str, plan: dict, results: List[Candidate],
+              pick: Optional[dict] = None) -> bool:
+    """Save the recommended, locally reviewed image as a single-page PDF.
+
+    Uses the same slide-scale image the grader saw (up to 1024px by default).
+    No image is downloaded again and an unsuitable judge pick cannot be exported.
+    """
+    suitable = suitable_candidates(results)
+    if not suitable:
+        return False
+    winner = next((c for c in suitable if pick and c.id == pick.get("winner_id")), None)
+    selected = winner or suitable[0]
+    if not selected.local_path:
+        raise ValueError("The selected figure has no downloaded image to export.")
+    with Image.open(selected.local_path) as image:
+        image.convert("RGB").save(
+            path, "PDF", resolution=150.0, quality=95,
+            title=plan.get("concept") or "Selected figure",
+            subject=f"Source: {selected.page_url or selected.image_url}",
+        )
+    return True
 
 
 HTML_TEMPLATE = """<!doctype html>

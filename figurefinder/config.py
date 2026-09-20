@@ -19,10 +19,10 @@ PROVIDER = os.environ.get("FF_PROVIDER", "openai").lower()
 # judge   : final head-to-head on the top few
 MODELS = {
     "openai": {
-        "planner": os.environ.get("FF_PLANNER_MODEL", "gpt-5.6-terra"),
-        "scorer": os.environ.get("FF_SCORER_MODEL", "gpt-5.6-terra"),
+        "planner": os.environ.get("FF_PLANNER_MODEL", "gpt-4.1-mini"),
+        "scorer": os.environ.get("FF_SCORER_MODEL", "gpt-4.1-mini"),
         "fast": os.environ.get("FF_FAST_MODEL", "gpt-5.6-luna"),
-        "judge": os.environ.get("FF_JUDGE_MODEL", "gpt-5.6-terra"),
+        "judge": os.environ.get("FF_JUDGE_MODEL", "gpt-4.1-mini"),
     },
     "anthropic": {
         "planner": os.environ.get("FF_PLANNER_MODEL", "claude-sonnet-5"),
@@ -47,15 +47,17 @@ def env(name: str, required: bool = True) -> str:
 
 
 # Which sources to query, in order. Override with FF_SOURCES or --sources.
+#   brave      broad web image index, requires BRAVE_API_KEY; no domain allowlist.
 #   google     broad, but needs 2 keys and is capped at 100 queries/day. Note
 #              that "search the entire web" is unavailable on engines created
 #              after 2026-01-20 and is switched off for everyone on 2027-01-01,
 #              so it now means "the sites configured on your engine".
 #   wikimedia  no key, no quota, no expiry. Excellent for science diagrams.
 #   openverse  no key needed, throttled when anonymous. Best-effort.
-SOURCES = [s for s in os.environ.get(
-    "FF_SOURCES", "wikimedia,openverse,google").split(",") if s.strip()]
+SOURCES = [s.strip() for s in os.environ.get(
+    "FF_SOURCES", "brave,wikimedia").split(",") if s.strip()]
 
+BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/images/search"
 GOOGLE_ENDPOINT = "https://www.googleapis.com/customsearch/v1"
 WIKIMEDIA_ENDPOINT = "https://commons.wikimedia.org/w/api.php"
 OPENVERSE_ENDPOINT = "https://api.openverse.org/v1/images/"
@@ -72,7 +74,9 @@ API_USER_AGENT = os.environ.get(
 )
 
 MAX_QUERIES = 5
-RESULTS_PER_QUERY = {"google": 10, "wikimedia": 20, "openverse": 20}
+RESULTS_PER_QUERY = {"brave": 20, "google": 10, "wikimedia": 20, "openverse": 20}
+SEARCH_WORKERS = max(1, int(os.environ.get("FF_SEARCH_WORKERS", "5")))
+MAX_FETCHED_CANDIDATES = max(1, int(os.environ.get("FF_MAX_FETCHED", "40")))
 
 # Google's safesearch: "off" | "active"
 SAFE_SEARCH = "active"
@@ -124,12 +128,18 @@ DHASH_DUPLICATE_DISTANCE = 6
 # calibrates better when it sees several at once) and cuts prompt overhead.
 # Above ~6 the model starts blurring candidates together.
 SCORE_BATCH_SIZE = 5
+SCORE_WORKERS = max(1, int(os.environ.get("FF_SCORE_WORKERS", "1")))
 
 # Long edge the image is resized to before sending. This roughly matches how
 # large the figure will render on a slide, which is exactly the scale at which
 # you want legibility judged.
 VISION_MAX_EDGE = 1024
 VISION_JPEG_QUALITY = 82
+
+# The web preview sets this to 1920 for its download asset. Keeping the CLI
+# default at 0 avoids doubling image storage for command-line-only runs.
+EXPORT_MAX_EDGE = int(os.environ.get("FF_EXPORT_MAX_EDGE", "0"))
+EXPORT_JPEG_QUALITY = int(os.environ.get("FF_EXPORT_JPEG_QUALITY", "92"))
 
 # Hard ceiling on how many candidates get a (paid) vision look.
 MAX_SCORED_CANDIDATES = 20

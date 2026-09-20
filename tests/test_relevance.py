@@ -93,11 +93,14 @@ class RelevanceTests(unittest.TestCase):
             {"scores": {**candidate().scores, "subject_match": 2}},
             {"scores": {**candidate().scores, "checklist_coverage": 0}},
             {"flags": {"photo_when_diagram_needed": True}},
-            {"flags": {"screenshot_or_page_capture": True}},
             {"final_score": 49},
         ):
             with self.subTest(changes=changes):
                 self.assertEqual(selection.suitable_candidates([candidate(**changes)]), [])
+
+    def test_page_capture_is_a_penalty_not_an_automatic_rejection(self):
+        c = candidate(flags={"screenshot_or_page_capture": True}, final_score=60)
+        self.assertEqual(selection.suitable_candidates([c]), [c])
 
     def test_label_failures_cannot_be_recommended_despite_perfect_scores(self):
         self.assertEqual(cli.build_parser().parse_args(["animal cell"]).language, "English")

@@ -19,6 +19,8 @@ dist/
 
 # Downloaded images and generated reports
 figurefinder_out/
+figurefinder_web_out/
+examples/
 
 # Editor and operating system files
 .DS_Store

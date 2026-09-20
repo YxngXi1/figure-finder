@@ -1,7 +1,9 @@
 """
 Candidate retrieval from pluggable image sources.
 
-Three sources ship:
+Four sources ship:
+  brave      Brave Image Search. Broad web coverage without a configured domain
+             allowlist. Requires BRAVE_API_KEY and an image-search subscription.
   google     Google Custom Search. Broad, but needs two keys, is capped at 100
              queries/day on the free tier, and its "search the entire web"
              option is gone for engines created after 2026-01-20 (and dies
@@ -19,6 +21,7 @@ the cheap metadata prefilters.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlparse
@@ -29,7 +32,7 @@ from . import config
 
 
 class SearchError(RuntimeError):
-    """Fatal — the run can't continue (e.g. bad Google credentials)."""
+    """Fatal — the run can't continue (e.g. bad search API credentials)."""
 
 
 class SourceUnavailable(RuntimeError):
@@ -113,6 +116,67 @@ def _is_image_mime(mime: str) -> bool:
         return True          # unknown; let the download decide
     mime = mime.lower().split(";", 1)[0].strip()
     return mime.startswith("image/") and "tiff" not in mime and "djvu" not in mime
+
+
+# ---------------------------------------------------------------------------
+# Source: Brave Image Search
+# ---------------------------------------------------------------------------
+
+def brave(query: str, limit: int) -> List[Candidate]:
+    token = config.env("BRAVE_API_KEY", required=False)
+    if not token or token.startswith("[") or "PASTE" in token.upper():
+        raise SearchError("Set BRAVE_API_KEY in .env to use Brave Image Search.")
+    params = {
+        "q": query, "count": min(max(limit, 1), 200), "country": "ALL",
+        "safesearch": "off" if config.SAFE_SEARCH == "off" else "strict",
+        # Preserve specialist terms from the planner rather than auto-correcting.
+        "spellcheck": "false",
+    }
+    try:
+        response = requests.get(
+            config.BRAVE_ENDPOINT, params=params,
+            headers={"Accept": "application/json", "X-Subscription-Token": token},
+            timeout=25,
+        )
+    except requests.RequestException as e:
+        # Don't echo raw request details or credentials in terminal errors.
+        raise SearchError("Could not reach Brave Image Search; check your connection.") from e
+    if response.status_code in (401, 403):
+        raise SearchError("Brave rejected the API key. Check BRAVE_API_KEY and "
+                          "that its subscription includes image search.")
+    if response.status_code == 429:
+        raise SearchError("Brave search rate limit or quota reached. Retry later "
+                          "or check your Brave API usage and spending limit.")
+    if response.status_code != 200:
+        raise SearchError(f"Brave Image Search returned HTTP {response.status_code}.")
+    try:
+        payload = response.json()
+    except ValueError as e:
+        raise SearchError("Brave Image Search returned invalid JSON.") from e
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise SearchError("Brave Image Search returned an unexpected response.")
+
+    out = []
+    for item in payload["results"]:
+        if not isinstance(item, dict):
+            continue
+        properties = item.get("properties") or {}
+        url = properties.get("url") or ""
+        if urlparse(url).scheme not in {"http", "https"}:
+            continue
+        page_url = item.get("url") or ""
+        out.append(Candidate(
+            image_url=url, page_url=page_url,
+            host=_host_of(page_url) or _host_of(url),
+            title=(item.get("title") or "").strip(),
+            # Use original dimensions, never the small thumbnail's dimensions.
+            # Unknown dimensions survive until fetch.hydrate measures the file.
+            width=int(properties.get("width") or 0),
+            height=int(properties.get("height") or 0),
+            thumbnail=(item.get("thumbnail") or {}).get("src") or "",
+            source="brave",
+        ))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +331,7 @@ def openverse(query: str, limit: int) -> List[Candidate]:
 
 
 SOURCE_FUNCS: Dict[str, Callable[[str, int], List[Candidate]]] = {
+    "brave": brave,
     "google": google_cse,
     "wikimedia": wikimedia,
     "openverse": openverse,
@@ -279,7 +344,11 @@ SOURCE_FUNCS: Dict[str, Callable[[str, int], List[Candidate]]] = {
 
 def collect_candidates(queries: List[str], sources: Optional[List[str]] = None,
                        verbose=True) -> List[Candidate]:
-    """Run every query against every enabled source, dedupe, prefilter."""
+    """Run enabled searches concurrently, then dedupe and prefilter.
+
+    Results are consumed round-robin by query rank. This keeps several query
+    angles represented when the caller caps downloads later in the pipeline.
+    """
     sources = sources or config.SOURCES
     by_url: Dict[str, Candidate] = {}
     dropped = {"blocked domain": 0, "too small": 0, "bad aspect": 0, "not an image": 0}
@@ -292,17 +361,37 @@ def collect_candidates(queries: List[str], sources: Optional[List[str]] = None,
         per_query = config.RESULTS_PER_QUERY.get(name, 10)
         if verbose:
             print(f"  {name}")
-        for q in queries[: config.MAX_QUERIES]:
+        source_queries = queries[: config.MAX_QUERIES]
+        # Brave is the latency-sensitive broad index and tolerates concurrent
+        # query angles. Keep the optional public/community APIs serial to avoid
+        # turning their tighter anonymous rate limits into failures.
+        source_workers = config.SEARCH_WORKERS if name == "brave" else 1
+        with ThreadPoolExecutor(
+            max_workers=min(source_workers, len(source_queries) or 1),
+            thread_name_prefix=f"search-{name}",
+        ) as pool:
+            futures = [(q, pool.submit(fn, q, per_query)) for q in source_queries]
+
+        query_results = []
+        unavailable = None
+        for q, future in futures:
             try:
-                items = fn(q, per_query)
+                items = future.result()
             except SourceUnavailable as e:
-                if verbose:
-                    print(f"    skipped — {e}")
-                break          # this source is out; don't burn the other queries
+                unavailable = unavailable or e
+                items = []
             if verbose:
                 print(f"    {len(items):>2} results  ·  {q}")
+            query_results.append((q, items))
+        if unavailable and verbose:
+            print(f"    skipped unavailable requests — {unavailable}")
 
-            for c in items:
+        max_results = max((len(items) for _, items in query_results), default=0)
+        for rank in range(max_results):
+            for q, items in query_results:
+                if rank >= len(items):
+                    continue
+                c = items[rank]
                 if not c.image_url:
                     continue
                 if c.image_url in by_url:
