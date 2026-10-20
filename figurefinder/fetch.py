@@ -48,7 +48,10 @@ def _download(url: str) -> Optional[bytes]:
 def _dhash(img: Image.Image, size: int = 8) -> int:
     """64-bit difference hash. Catches the same figure re-hosted and rescaled."""
     small = img.convert("L").resize((size + 1, size), Image.LANCZOS)
-    px = list(small.getdata())
+    # Pillow 14 removes getdata(); keep compatibility with Pillow 10-13 while
+    # using the replacement whenever it is available.
+    pixels = getattr(small, "get_flattened_data", small.getdata)
+    px = list(pixels())
     bits = 0
     for row in range(size):
         base = row * (size + 1)
@@ -148,6 +151,7 @@ def hydrate(candidates: List[Candidate], workdir: str, verbose=True) -> List[Can
             for k in kept
         ):
             dupes += 1
+            c.rejected = "Near-duplicate of a higher-resolution candidate."
             continue
         kept.append(c)
 

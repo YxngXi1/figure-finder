@@ -11,6 +11,8 @@ from . import config, fetch, llm, report, search, selection
 
 
 def _load_dotenv(path=".env") -> None:
+    if os.environ.get("FF_HOSTED_WORKER") == "1":
+        return
     if not os.path.exists(path):
         return
     with open(path) as stream:
@@ -166,9 +168,12 @@ def main(argv=None) -> int:
         print("Nothing survived the prefilters. Try --queries 6, add a source, "
               "or loosen MIN_WIDTH/MIN_PIXELS in config.py.")
         return 1
+    considered = list(candidates)
     if len(candidates) > args.max_fetched:
         print(f"    limiting downloads to {args.max_fetched} of {len(candidates)} "
               "interleaved search results")
+        for candidate in candidates[args.max_fetched:]:
+            candidate.rejected = "Not downloaded: this run's download limit was reached."
         candidates = candidates[: args.max_fetched]
     print(f"    {report.DIM}timing · search {time.monotonic() - stage_started:.1f}s{report.RESET}")
 
@@ -179,12 +184,15 @@ def main(argv=None) -> int:
     print(f"\n{report.BOLD}Fetching{report.RESET}")
     usable = fetch.hydrate(candidates, workdir)
     if not usable:
+        report.write_json(os.path.join(args.out, "results.json"), notes, plan, [], None, considered)
         print("Every candidate failed to download or was too small.")
         return 1
     print(f"    {report.DIM}timing · fetch {time.monotonic() - stage_started:.1f}s{report.RESET}")
 
     # Prefer higher-resolution and better-sourced images for the paid look.
     usable.sort(key=lambda c: (search.domain_bonus(c.host), c.pixels), reverse=True)
+    for candidate in usable[args.max_scored:]:
+        candidate.rejected = "Not graded: this run's AI scoring limit was reached."
     usable = usable[: args.max_scored]
 
     # 4. Score ----------------------------------------------------------------
@@ -195,6 +203,9 @@ def main(argv=None) -> int:
         usable, plan, args.audience, args.style, args.language,
         provider=provider, model=scorer_model,
     )
+    for candidate in usable:
+        if not candidate.scores:
+            candidate.rejected = "Not graded: the AI returned no score for this candidate."
     print(f"    {report.DIM}timing · grade {time.monotonic() - stage_started:.1f}s{report.RESET}")
 
     # 5. Judge ----------------------------------------------------------------
@@ -211,7 +222,7 @@ def main(argv=None) -> int:
     report.print_results(results, plan, args.top, pick)
 
     json_path = os.path.join(args.out, "results.json")
-    report.write_json(json_path, notes, plan, results, pick)
+    report.write_json(json_path, notes, plan, results, pick, considered)
     print(f"{report.DIM}json → {json_path}{report.RESET}")
 
     if args.pdf:

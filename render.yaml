@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: figure-finder
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m figurefinder.web
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: BRAVE_API_KEY
+        sync: false
+      - key: FF_WEB_PASSWORD
+        sync: false
+      - key: FF_WEB_SESSION_SECRET
+        generateValue: true
+      - key: FF_WEB_SECURE_COOKIES
+        value: "1"
+      - key: FF_WEB_DAILY_SEARCH_LIMIT
+        value: "40"
+      - key: FF_WEB_SEARCH_COOLDOWN_SECONDS
+        value: "10"
+      - key: FF_SCORE_WORKERS
+        value: "2"

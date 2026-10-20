@@ -92,7 +92,7 @@ def print_results(results: List[Candidate], plan: dict, top_n: int,
 
 
 def write_json(path: str, notes: str, plan: dict, results: List[Candidate],
-               pick: Optional[dict]) -> None:
+               pick: Optional[dict], considered=None) -> None:
     suitable = suitable_candidates(results)
     if pick and not any(c.id == pick.get("winner_id") for c in suitable):
         pick = None
@@ -112,6 +112,12 @@ def write_json(path: str, notes: str, plan: dict, results: List[Candidate],
                 if k not in ("dhash", "local_path", "thumbnail")},
              "rejected": rejection_reason(c)}
             for c in results if rejection_reason(c)
+        ],
+        "considered_candidates": [
+            {**{k: v for k, v in asdict(c).items()
+                if k not in ("dhash", "local_path", "thumbnail")},
+             "rejected": rejection_reason(c) if c.scores else c.rejected}
+            for c in (considered if considered is not None else results)
         ],
     }
     with open(path, "w") as f:

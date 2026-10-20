@@ -248,9 +248,19 @@ find it.
 
 Guidance for the checklist:
 - `must_show` is the pass/fail list — the specific structures, stages, axes, \
-labels or relationships without which the figure fails this slide. Be concrete \
-and name things ("the four chambers named individually: rumen, reticulum, \
-omasum, abomasum"), not vague ("digestive anatomy"). Keep it to 3-6 items.
+labels or relationships without which the figure would be scientifically wrong \
+or would fail an explicit request in the notes. Be concrete and name things \
+("the four chambers named individually: rumen, reticulum, omasum, abomasum"), \
+not vague ("digestive anatomy"). Keep it to 2-5 items.
+- Do not invent pass/fail requirements merely because they would improve the \
+presentation. Colour coding, visual style, arrows, clean backgrounds, direct \
+versus keyed labels, and extra context belong in `nice_to_have` unless the \
+presenter explicitly requested them. For broad notes, use the smallest set of \
+structures needed to identify the concept; do not turn every related structure \
+into a requirement.
+- `nice_to_have` contains presentation preferences and helpful enrichment. A \
+candidate must not fail checklist coverage or required-label checks solely for \
+missing one of these items.
 - `should_avoid` is what a wrong-but-plausible result looks like for this \
 topic — the trap a naive image search falls into.
 - For a labelled diagram, explicitly require visible, readable labels in \
@@ -324,11 +334,12 @@ A cover, title page, or contents page is not a diagram of the requested concept.
 For these, raise book_cover_or_title_page and score subject_match and \
 checklist_coverage as 0. Never infer that the image shows a figure inside a book.
 
-For a labelled diagram, verify each required label on the image itself in \
+For a labelled diagram, verify each must-show label on the image itself in \
 {language}. English search text, filenames, and captions do not establish that \
 the diagram's labels are English. List the label text you actually read in \
 elements_found. Raise missing_required_labels for absent or unverifiable \
-required labels, foreign_language_labels for labels lacking the requested \
+must-show labels, but never for a missing nice-to-have item. Raise \
+foreign_language_labels for must-show labels lacking the requested \
 language, and unreadable_text when labels cannot be read. A bilingual diagram \
 is acceptable only if all required labels are also readable in {language}. \
 Standard scientific names, abbreviations, and symbols used in that language \
@@ -358,9 +369,12 @@ Grade every candidate. Do not skip any. Use the candidate ids exactly as given.
 JUDGE_PROMPT = """\
 These are the top-scoring candidates for the slide concept below. Pick the one \
 you would actually put on the slide, and say why it beats the runner-up in one \
-or two sentences. Weigh usability on a slide as heavily as correctness — a \
-slightly less complete figure that is clean and readable usually wins over a \
-dense, correct one.
+or two sentences. Prioritise correctness and the requested teaching content. \
+Use slide cleanliness only as a light tie-breaker. Do not call a detailed \
+textbook figure "cluttered" merely because it contains more useful labels; \
+penalise density only when core labels are genuinely difficult to read at the \
+displayed size. Do not treat colour, layout, or style as mandatory unless it \
+appears in the must-show list.
 
 <concept>{concept}</concept>
 <what_the_figure_must_show>
@@ -407,7 +421,7 @@ PLAN_SCHEMA = _obj({
     "must_show": {
         "type": "array",
         "items": {"type": "string"},
-        "description": "3-6 concrete elements the figure must contain.",
+        "description": "2-5 scientifically essential or explicitly requested elements; never aesthetic preferences.",
     },
     "nice_to_have": {"type": "array", "items": {"type": "string"}},
     "should_avoid": {

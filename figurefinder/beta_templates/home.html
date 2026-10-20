@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block content %}
+<div id="app" data-csrf="{{ session.csrf }}" data-client-id="{{ config.GOOGLE_CLIENT_ID }}" data-picker-key="{{ config.GOOGLE_PICKER_KEY }}" data-project="{{ config.GOOGLE_PROJECT_NUMBER }}" data-ready="{{ 'true' if ready else 'false' }}">
+  <div class="intro"><p class="eyebrow">YOUR CONTENT. A CLEARER PICTURE.</p><h1>Let your slides<br>show a little more.</h1><p class="lede">Choose a presentation. We’ll find where a figure helps, then add an image, caption and source in the available space.</p></div>
+  <section class="card">
+    <div class="section-heading"><span class="step">01</span><h2>Choose your presentation</h2></div>
+    <p>Connect your Google account and select a deck you can edit. Only presentations you select are available to this app.</p>
+    {% if ready %}
+    <button id="choose" disabled>Loading Google…</button>
+    <p id="selection" class="muted">No presentation selected.</p>
+    <button id="disconnect" class="text-button" hidden>Disconnect Google</button>
+    {% else %}
+    <p class="notice">Google connection is being set up by the owner. Please check back shortly.</p>
+    {% endif %}
+    <div class="divider"></div>
+    <div class="section-heading"><span class="step">02</span><h2>Add the figures</h2></div>
+    <label for="figures">Maximum figures per slide</label>
+    <select id="figures" aria-describedby="figure-limit-help">{% for n in range(1, config.MAX_FIGURES + 1) %}<option value="{{ n }}"{% if n == 1 %} selected{% endif %}>{{ n }} per slide</option>{% endfor %}</select>
+    <p id="figure-limit-help">Each slide can receive up to this many useful figures. Title slides, transitions and slides that don’t need a visual are skipped. The app may add fewer when there isn’t enough room.</p>
+    <p>This edits the selected presentation directly. Make a copy in Google Slides first if you want to keep the original.</p>
+    <p class="muted">Up to {{ config.MAX_SLIDES }} slides per deck. Slides without room, or with figures already added by this app, are skipped.</p>
+    <button id="run" disabled>Add figures <span aria-hidden="true">↗</span></button>
+    <p id="feedback" role="status" aria-live="polite"></p>
+  </section>
+  <section class="runs"><div class="section-heading"><h2>Your runs</h2><span class="badge">THIS SESSION</span></div><div id="runs"><p class="muted">Your results will appear here.</p></div></section>
+  <p class="hosting-note">This beta uses free hosting. Keep this page open while it works. If the server restarts, sign in again and check your presentation before retrying. Temporary run history expires after 6 hours.</p>
+  <form action="/logout" method="post"><input type="hidden" name="csrf" value="{{ session.csrf }}"><button id="logout" class="text-button">Sign out &amp; clear history</button></form>
+</div>
+<script src="{{ url_for('static', filename='beta.js') }}" defer></script>
+{% if ready %}<script src="https://apis.google.com/js/api.js" defer></script><script src="https://accounts.google.com/gsi/client" defer></script>{% endif %}
+{% endblock %}

@@ -20,6 +20,10 @@ dist/
 # Downloaded images and generated reports
 figurefinder_out/
 figurefinder_web_out/
+figurefinder_slides_out*/
+.secrets/
+credentials.json
+token.json
 examples/
 
 # Editor and operating system files

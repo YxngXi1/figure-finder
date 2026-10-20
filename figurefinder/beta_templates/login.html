@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="intro"><p class="eyebrow">A LITTLE MORE VISUAL</p><h1>Give your slides<br>the right figures.</h1><p class="lede">Find useful images for your existing content, with captions, source citations and room to breathe.</p></div>
+<section class="card login-card"><h2>Welcome to the beta</h2><p>Free to use. Enter your invitation password to continue.</p>
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ session.csrf }}">
+    <label for="password">Access password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256" autofocus>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <button type="submit">Continue <span aria-hidden="true">→</span></button>
+  </form>
+</section>
+{% endblock %}

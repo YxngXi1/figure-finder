@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from . import config
+from . import citations, config
 
 
 class SearchError(RuntimeError):
@@ -55,6 +55,9 @@ class Candidate:
     thumbnail: str = ""
     source: str = ""             # which backend found it
     license: str = ""            # populated by wikimedia/openverse only
+    creator: str = ""
+    attribution: str = ""
+    license_url: str = ""
     found_by: List[str] = field(default_factory=list)
 
     # filled in later
@@ -279,6 +282,9 @@ def wikimedia(query: str, limit: int) -> List[Candidate]:
             # Original dimensions, not the thumb's — the resolution score wants these.
             width=int(ii.get("width") or 0), height=int(ii.get("height") or 0),
             license=lic, source="wikimedia",
+            creator=citations.plain_text((meta.get("Artist") or {}).get("value", "")),
+            attribution=citations.plain_text((meta.get("Attribution") or {}).get("value", "")),
+            license_url=(meta.get("LicenseUrl") or {}).get("value", ""),
         ))
     return out
 
@@ -324,7 +330,10 @@ def openverse(query: str, limit: int) -> List[Candidate]:
             # Openverse often returns null dimensions; 0 means "check after download".
             width=int(it.get("width") or 0), height=int(it.get("height") or 0),
             thumbnail=it.get("thumbnail") or "",
-            license=(it.get("license") or "").upper(),
+            license=" ".join(part for part in ((it.get("license") or "").upper(),
+                                               it.get("license_version") or "") if part),
+            creator=citations.plain_text(it.get("creator")),
+            license_url=it.get("license_url") or "",
             source="openverse",
         ))
     return out

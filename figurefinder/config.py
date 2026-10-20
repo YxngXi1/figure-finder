@@ -112,7 +112,7 @@ EDU_TLD_BONUS = 3  # any .edu / .ac.uk / .gov host
 
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 DOWNLOAD_TIMEOUT = 15
-DOWNLOAD_WORKERS = 8
+DOWNLOAD_WORKERS = max(1, int(os.environ.get("FF_DOWNLOAD_WORKERS", "8")))
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"

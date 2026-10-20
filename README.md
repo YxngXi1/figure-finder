@@ -4,6 +4,13 @@ Give it jot notes for a slide. It finds a good figure for that slide on the web,
 grades the candidates against a topic-specific checklist, and hands you a ranked
 list with links.
 
+**Private Google Slides agent:** the new local workflow reads an existing deck,
+uses AI to select text blocks that would benefit from a figure, and can insert
+searched images into available space. See [setup and usage](docs/google-slides.md).
+**The temporary figure-need criteria are clearly marked in
+[`figurefinder/slide_policy.py`](figurefinder/slide_policy.py).** Public access is
+outside this workflow's scope.
+
 Each suitable result includes a direct image link. The terminal report ends with the
 judge's recommended image link, or the top-ranked image link when there is no
 judge pick, plus its source page when available.
@@ -236,8 +243,10 @@ sharper export does not increase vision cost.
 
 The web interface uses Brave Image Search only. Its faster default path runs
 three Brave query angles concurrently, interleaves their results, downloads at
-most 24 candidates, grades eight images in up to two concurrent model calls,
+most 16 candidates, grades eight images in up to two concurrent model calls,
 and skips the optional final judge call. The form can re-enable that comparison.
+Compared with the diagnostic first version, this removes up to one third of the
+image-download work without reducing the number of graded alternatives.
 Wikimedia, Openverse, and Google remain available only through the diagnostic
 CLI because they provide genuinely different coverage, but they no longer
 appear in the end-user web form.
@@ -245,8 +254,11 @@ appear in the end-user web form.
 Access requires the shared password in the ignored `.env.web` file. Successful
 logins receive a signed, HTTP-only, same-site session cookie lasting 12 hours.
 Login attempts are throttled and search/logout forms use CSRF tokens. Exact
-repeated searches reuse an in-memory completed result while the server remains
-running, avoiding duplicate API calls.
+repeated searches reuse an in-memory running or completed job while the server
+remains active, avoiding duplicate search and AI charges. New searches have a
+10-second per-session cooldown and a configurable 40-search rolling daily cap.
+Set `FF_WEB_SEARCH_COOLDOWN_SECONDS` and `FF_WEB_DAILY_SEARCH_LIMIT` to change
+these safeguards.
 
 Start it from the repository folder:
 
@@ -272,6 +284,32 @@ Useful diagnostic options:
 ./figure-finder-web --port 8080
 ./figure-finder-web --workers 2 --out /path/to/web-jobs
 ```
+
+### Render deployment
+
+**For the current Google Slides web beta**, use
+[`docs/supervisor-beta.md`](docs/supervisor-beta.md) and `render-beta.yaml`.
+That configuration serves the password-protected presentation picker, per-slide
+figure insertion, captions, citations and candidate debugging. The configuration
+below is for the older single-image search interface.
+
+The repository includes `render.yaml` so new Render services can be created as
+a Blueprint with the build command, health check, secure cookies, concurrency,
+and usage limits already defined. Render will prompt for `OPENAI_API_KEY`,
+`BRAVE_API_KEY`, and `FF_WEB_PASSWORD`; secrets are never stored in the file.
+
+For an existing Render service, use:
+
+```text
+Build command: pip install -r requirements.txt
+Start command: python -m figurefinder.web
+Health check: /healthz
+```
+
+The server automatically binds to `0.0.0.0` and Render's `PORT` when that
+environment variable exists. Set `FF_WEB_SECURE_COOKIES=1`, add a generated
+`FF_WEB_SESSION_SECRET`, and keep one instance because jobs and the exact-search
+cache are currently process-local.
 
 ### Example: animal cell diagram as a PDF
 

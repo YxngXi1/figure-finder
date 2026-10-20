@@ -1,0 +1,38 @@
+# Slides supervisor beta. The original render.yaml runs the older search UI.
+# No paid instances, databases or disks are provisioned by this blueprint.
+services:
+  - type: web
+    name: figure-finder-slides-beta
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-beta.txt
+    startCommand: gunicorn --config gunicorn_beta.py 'figurefinder.beta:create_app()'
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: BRAVE_API_KEY
+        sync: false
+      - key: FF_BETA_PASSWORD
+        sync: false
+      - key: FF_BETA_SESSION_SECRET
+        generateValue: true
+      - key: FF_BETA_SECURE_COOKIES
+        value: "1"
+      - key: FF_GOOGLE_WEB_CLIENT_ID
+        sync: false
+      - key: FF_GOOGLE_PICKER_KEY
+        sync: false
+      - key: FF_GOOGLE_PROJECT_NUMBER
+        sync: false
+      - key: FF_SUPPORT_EMAIL
+        sync: false
+      - key: FF_BETA_MAX_SLIDES
+        value: "15"
+      - key: FF_BETA_MAX_FIGURES_PER_SLIDE
+        value: "3"
+      - key: FF_BETA_DAILY_JOBS
+        value: "10"
+      - key: FF_BETA_JOB_SECONDS
+        value: "1200"

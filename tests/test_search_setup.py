@@ -103,6 +103,32 @@ class BraveSearchTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def test_wikimedia_attribution_is_preserved_as_plain_text(self):
+        response = mock.Mock()
+        response.json.return_value = {"query": {"pages": {"1": {
+            "title": "File:Heart.svg", "imageinfo": [{"url": "https://example.org/heart.svg",
+            "mime": "image/svg+xml", "extmetadata": {
+                "Artist": {"value": "<a>Jane &amp; John</a>"},
+                "Attribution": {"value": "<span>Custom credit</span>"},
+                "LicenseShortName": {"value": "CC BY 4.0"},
+                "LicenseUrl": {"value": "https://creativecommons.org/licenses/by/4.0/"}}}]}}}}
+        with mock.patch.object(search.requests, "get", return_value=response):
+            candidate = search.wikimedia("heart", 1)[0]
+        self.assertEqual(candidate.creator, "Jane & John")
+        self.assertEqual(candidate.attribution, "Custom credit")
+        self.assertEqual(candidate.license_url, "https://creativecommons.org/licenses/by/4.0/")
+
+    def test_openverse_preserves_creator_and_license_version(self):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"results": [{"url": "https://example.org/image.jpg",
+            "creator": "Jane Doe", "license": "by", "license_version": "4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/"}]}
+        with mock.patch.object(search.requests, "get", return_value=response):
+            candidate = search.openverse("heart", 1)[0]
+        self.assertEqual(candidate.creator, "Jane Doe")
+        self.assertEqual(candidate.license, "BY 4.0")
+        self.assertEqual(candidate.license_url, "https://creativecommons.org/licenses/by/4.0/")
+
     def test_dotenv_overrides_models_and_sources_after_import(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {}, clear=True):
             path = Path(directory) / ".env"

@@ -27,7 +27,7 @@ def request_data():
         "language": "English",
         "sources": ["brave"],
         "queries": 3,
-        "max_fetched": 24,
+        "max_fetched": 16,
         "max_scored": 8,
         "top": 5,
         "no_judge": False,
@@ -116,6 +116,22 @@ class WebHelpersTests(unittest.TestCase):
             self.assertIs(state.add_job(request_data()), job)
             state.executor.shutdown(wait=True)
 
+    def test_duplicate_inflight_job_is_reused_and_limits_block_new_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = web.AppState(
+                Path(directory), workers=1, daily_search_limit=1,
+                search_cooldown_seconds=0,
+            )
+            with mock.patch.object(state.executor, "submit") as submit:
+                first = state.add_job(request_data(), requester="session-a")
+                duplicate = state.add_job(request_data(), requester="session-b")
+                self.assertIs(duplicate, first)
+                self.assertEqual(submit.call_count, 1)
+                changed = {**request_data(), "notes": "plant cell"}
+                with self.assertRaises(web.SearchLimitError):
+                    state.add_job(changed, requester="session-a")
+            state.executor.shutdown(wait=True)
+
     def test_signed_sessions_expire_and_csrf_is_session_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             state = web.AppState(Path(directory), password="test")
@@ -172,6 +188,7 @@ class WebRouteTests(unittest.TestCase):
             home = response.read().decode()
         self.assertIn("Find the right image", home)
         self.assertIn("Brave Image Search", home)
+        self.assertIn("new searches available", home)
         self.assertNotIn("Wikimedia", home)
         self.assertNotIn("Recent jobs", home)
         secret = os.environ.get("OPENAI_API_KEY")
@@ -197,6 +214,9 @@ class WebRouteTests(unittest.TestCase):
             status = json.loads(response.read())
         self.assertEqual(status["status"], "complete")
         self.assertEqual(status["result_count"], 2)
+
+        with self.opener.open(self.base + "/healthz", timeout=2) as response:
+            self.assertEqual(response.read(), b"ok")
 
         with self.assertRaises(HTTPError) as caught:
             self.opener.open(Request(

@@ -49,6 +49,19 @@ LOGIN_WINDOW_SECONDS = 5 * 60
 LOGIN_ATTEMPT_LIMIT = 5
 
 
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read a bounded integer setting without letting one bad value stop startup."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+class SearchLimitError(RuntimeError):
+    """A new paid search was blocked by the web usage guard."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -119,7 +132,9 @@ class WebJob:
 
 
 class AppState:
-    def __init__(self, output_root: Path, workers: int = 1, password: str = ""):
+    def __init__(self, output_root: Path, workers: int = 1, password: str = "",
+                 daily_search_limit: Optional[int] = None,
+                 search_cooldown_seconds: Optional[int] = None):
         self.output_root = output_root.resolve()
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, WebJob] = {}
@@ -127,10 +142,23 @@ class AppState:
         self.executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="figure-job")
         self.workers = workers
         self.password = password
-        self.session_secret = secrets.token_bytes(32)
+        configured_secret = os.environ.get("FF_WEB_SESSION_SECRET", "")
+        self.session_secret = (
+            configured_secret.encode("utf-8") if configured_secret else secrets.token_bytes(32)
+        )
         self.secure_cookies = os.environ.get("FF_WEB_SECURE_COOKIES") == "1"
         self.login_failures: dict[str, list[float]] = {}
         self.result_cache: dict[str, str] = {}
+        self.daily_search_limit = daily_search_limit if daily_search_limit is not None else _env_int(
+            "FF_WEB_DAILY_SEARCH_LIMIT", 40, 1, 10_000
+        )
+        self.search_cooldown_seconds = (
+            search_cooldown_seconds if search_cooldown_seconds is not None else _env_int(
+                "FF_WEB_SEARCH_COOLDOWN_SECONDS", 10, 0, 3_600
+            )
+        )
+        self.search_starts: list[float] = []
+        self.last_search_by_session: dict[str, float] = {}
 
     @staticmethod
     def _request_key(request: dict) -> str:
@@ -138,21 +166,47 @@ class AppState:
             json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-    def add_job(self, request: dict) -> WebJob:
+    def _trim_search_starts(self, now: float) -> None:
+        self.search_starts = [started for started in self.search_starts if now - started < 86_400]
+
+    def searches_remaining(self) -> int:
+        with self.lock:
+            self._trim_search_starts(time.monotonic())
+            return max(0, self.daily_search_limit - len(self.search_starts))
+
+    def add_job(self, request: dict, requester: str = "") -> WebJob:
         request_key = self._request_key(request)
         with self.lock:
             cached_id = self.result_cache.get(request_key)
             cached = self.jobs.get(cached_id or "")
-            if cached and cached.status == "complete" and cached.results_path.is_file():
+            if cached and (
+                cached.status in {"queued", "running"}
+                or (cached.status == "complete" and cached.results_path.is_file())
+            ):
                 return cached
-        job_id = uuid.uuid4().hex
-        job = WebJob(
-            id=job_id,
-            request=request,
-            output_dir=str(self.output_root / job_id),
-        )
-        with self.lock:
+
+            now = time.monotonic()
+            self._trim_search_starts(now)
+            if len(self.search_starts) >= self.daily_search_limit:
+                raise SearchLimitError(
+                    "The daily search limit has been reached. Try again after the 24-hour window resets."
+                )
+            last_started = self.last_search_by_session.get(requester, 0.0)
+            wait = self.search_cooldown_seconds - (now - last_started)
+            if requester and wait > 0:
+                raise SearchLimitError(f"Please wait {max(1, int(wait + 0.999))} seconds before starting another search.")
+
+            job_id = uuid.uuid4().hex
+            job = WebJob(
+                id=job_id,
+                request=request,
+                output_dir=str(self.output_root / job_id),
+            )
             self.jobs[job_id] = job
+            self.result_cache[request_key] = job.id
+            self.search_starts.append(now)
+            if requester:
+                self.last_search_by_session[requester] = now
         self._write_manifest(job)
         self.executor.submit(self._run_job, job)
         return job
@@ -420,6 +474,7 @@ def _environment_html() -> str:
 
 def render_home(state: AppState, csrf: str, message: str = "") -> bytes:
     error = f'<div class="notice">{_escape(message)}</div>' if message else ""
+    remaining = state.searches_remaining()
     content = f"""
 <div class="eyebrow">Teaching visuals, without the tab hunt</div>
 <h1>Find the right image for your slide</h1>
@@ -437,7 +492,7 @@ def render_home(state: AppState, csrf: str, message: str = "") -> bytes:
 <div><label for="top">Options to show</label><input id="top" name="top" type="number" min="1" max="12" value="5"></div></div>
 <label><input type="checkbox" name="run_judge" value="1"> Run an extra comparison of the finalists <span class="muted">(slower)</span></label>
 </details>
-<div class="actions"><button type="submit">Find my image</button><span class="muted">Powered by Brave Image Search</span></div>
+<div class="actions"><button type="submit">Find my image</button><span class="muted">Powered by Brave Image Search · {remaining} new searches available</span></div>
 </form></section>"""
     return _layout("Find an image", content, csrf=csrf)
 
@@ -566,7 +621,10 @@ def _parse_job_request(body: bytes) -> tuple[Optional[dict], Optional[str]]:
         "language": text_field("language", "English", 80),
         "sources": ["brave"],
         "queries": 3,
-        "max_fetched": max(24, max_scored),
+        # Eight graded images normally need only sixteen downloads. Failed and
+        # duplicate files still have room, without paying the latency of 24
+        # downloads on every request.
+        "max_fetched": max(16, max_scored),
         "max_scored": max_scored,
         "top": top,
         "no_judge": (fields.get("run_judge") or [""])[0] != "1",
@@ -640,6 +698,9 @@ class DiagnosticHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlparse(self.path).path
+        if path == "/healthz":
+            self._send(b"ok", content_type="text/plain; charset=utf-8")
+            return
         if path == "/login":
             if self._authenticated_token():
                 self._redirect("/")
@@ -723,7 +784,12 @@ class DiagnosticHandler(BaseHTTPRequestHandler):
             csrf = self.state.csrf_token(session_token)
             self._send(render_home(self.state, csrf, error), HTTPStatus.BAD_REQUEST)
             return
-        job = self.state.add_job(request or {})
+        try:
+            job = self.state.add_job(request or {}, requester=session_token)
+        except SearchLimitError as exc:
+            csrf = self.state.csrf_token(session_token)
+            self._send(render_home(self.state, csrf, str(exc)), HTTPStatus.TOO_MANY_REQUESTS)
+            return
         self._redirect(f"/jobs/{job.id}")
 
     def _serve_candidate_image(self, job: WebJob, candidate_id: str, attachment: bool) -> None:
@@ -767,8 +833,11 @@ def create_server(host: str, port: int, state: AppState) -> ThreadingHTTPServer:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Figure Finder diagnostic web preview.")
-    parser.add_argument("--host", default="127.0.0.1", help="listen address (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8000, help="listen port (default: 8000)")
+    cloud_port = os.environ.get("PORT")
+    default_host = os.environ.get("FF_WEB_HOST", "0.0.0.0" if cloud_port else "127.0.0.1")
+    default_port = _env_int("PORT", 8000, 1, 65_535)
+    parser.add_argument("--host", default=default_host, help=f"listen address (default: {default_host})")
+    parser.add_argument("--port", type=int, default=default_port, help=f"listen port (default: {default_port})")
     parser.add_argument("--workers", type=int, default=1, help="simultaneous user jobs (default: 1)")
     parser.add_argument("--out", default=str(DEFAULT_OUTPUT_ROOT), help="web job output directory")
     return parser
